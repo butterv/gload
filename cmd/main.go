@@ -7,20 +7,20 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jhump/protoreflect/dynamic"
-
 	"github.com/jhump/protoreflect/desc"
-
-	"github.com/jhump/protoreflect/grpcreflect"
-	"google.golang.org/grpc/metadata"
-
+	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
+	"github.com/jhump/protoreflect/grpcreflect"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	reflectpb "google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
 )
 
-var errNoMethodNameSpecified = errors.New("no method name specified")
-var base64Codecs = []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding}
+var (
+	base64Codecs = []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding}
+
+	errNoMethodNameSpecified = errors.New("no method name specified")
+)
 
 func main() {
 	ctx := context.Background()
@@ -34,17 +34,17 @@ func main() {
 
 	stub := grpcdynamic.NewStub(conn)
 
+	// TODO(butterv): The following are executed in parallel for each request.
 	var opts []grpc.CallOption
 	//if w.config.enableCompression {
 	// opts = append(opts, grpc.UseCompressor(gzip.Name))
 	//}
 
-	md := MetadataFromHeaders(nil)
-
+	md := metadataFromHeaders(nil)
 	refCtx := metadata.NewOutgoingContext(ctx, md)
 	refClient := grpcreflect.NewClient(refCtx, reflectpb.NewServerReflectionClient(conn))
 
-	mtd, err := GetMethodDescFromReflect("grpc.health.v1.Health/Check", refClient)
+	mtd, err := getMethodDescFromReflect("grpc.health.v1.Health/Check", refClient)
 	if err != nil {
 		panic(err)
 	}
@@ -63,14 +63,16 @@ func main() {
 	fmt.Printf("res: %s\n", res.String())
 }
 
-func MetadataFromHeaders(headers []string) metadata.MD {
+func metadataFromHeaders(headers []string) metadata.MD {
 	md := make(metadata.MD)
+
 	for _, part := range headers {
 		if part != "" {
 			pieces := strings.SplitN(part, ":", 2)
 			if len(pieces) == 1 {
 				pieces = append(pieces, "") // if no value was specified, just make it "" (maybe the header value doesn't matter)
 			}
+
 			headerName := strings.ToLower(strings.TrimSpace(pieces[0]))
 			val := strings.TrimSpace(pieces[1])
 			if strings.HasSuffix(headerName, "-bin") {
@@ -78,32 +80,38 @@ func MetadataFromHeaders(headers []string) metadata.MD {
 					val = v
 				}
 			}
+
 			md[headerName] = append(md[headerName], val)
 		}
 	}
+
 	return md
 }
 
 func decode(val string) (string, error) {
 	var firstErr error
-	var b []byte
+	//var b []byte
+
 	// we are lenient and can accept any of the flavors of base64 encoding
 	for _, d := range base64Codecs {
-		var err error
-		b, err = d.DecodeString(val)
+		//var err error
+		b, err := d.DecodeString(val)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
+
 			continue
 		}
+
 		return string(b), nil
 	}
+
 	return "", firstErr
 }
 
-// GetMethodDescFromReflect gets method descriptor for the call from reflection using client
-func GetMethodDescFromReflect(call string, client *grpcreflect.Client) (*desc.MethodDescriptor, error) {
+// getMethodDescFromReflect gets method descriptor for the call from reflection using client
+func getMethodDescFromReflect(call string, client *grpcreflect.Client) (*desc.MethodDescriptor, error) {
 	call = strings.Replace(call, "/", ".", -1)
 	file, err := client.FileContainingSymbol(call)
 	if err != nil || file == nil {
@@ -147,21 +155,26 @@ func parseServiceMethod(svcAndMethod string) (string, string, error) {
 	if len(svcAndMethod) == 0 {
 		return "", "", errNoMethodNameSpecified
 	}
+
 	if svcAndMethod[0] == '.' {
 		svcAndMethod = svcAndMethod[1:]
 	}
+
 	if len(svcAndMethod) == 0 {
 		return "", "", errNoMethodNameSpecified
 	}
+
 	switch strings.Count(svcAndMethod, "/") {
 	case 0:
 		pos := strings.LastIndex(svcAndMethod, ".")
 		if pos < 0 {
 			return "", "", newInvalidMethodNameError(svcAndMethod)
 		}
+
 		return svcAndMethod[:pos], svcAndMethod[pos+1:], nil
 	case 1:
 		split := strings.Split(svcAndMethod, "/")
+
 		return split[0], split[1], nil
 	default:
 		return "", "", newInvalidMethodNameError(svcAndMethod)
@@ -178,5 +191,6 @@ func findServiceSymbol(resolved map[string]*desc.FileDescriptor, fullyQualifiedN
 			return dsc, nil
 		}
 	}
+
 	return nil, fmt.Errorf("cannot find service %q", fullyQualifiedName)
 }
