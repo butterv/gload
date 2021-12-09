@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/jessevdk/go-flags"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 	"github.com/jhump/protoreflect/dynamic/grpcdynamic"
@@ -22,17 +24,56 @@ var (
 	errNoMethodNameSpecified = errors.New("no method name specified")
 )
 
+type Options struct {
+	insecure          bool   `long:"insecure" description:"Use insecure connection." default:"false"`
+	timeout           uint   `long:"timeout" description:"Timeout for each request. Default is 10s, use 0 for infinite." default:"10"`
+	connectionTimeout uint   `long:"timeout" description:"Connection timeout for the initial connection dial." default:"10"`
+	host              string `long:"host" description:"Host to be load tested." required:"true"`
+	concurrency       uint   `long:"concurrency" description:"Number of concurrent operations." default:"1"`
+	connections       int    `long:"connections" description:"Number of connections." default:"1"`
+	rps               uint   `long:"rps" description:"Request per seconds." default:"1"`
+	duration          uint   `long:"duration" description:"Duration(seconds) of the load test." required:"true"`
+}
+
+var opts Options
+
 func main() {
+	// TODO(butter): If panic, all connections are closed explicitly with using defer.
+
+	parser := flags.NewParser(&opts, flags.Default)
+	parser.Name = "gload"
+	parser.Usage = "hogehoge"
+
+	args, err := parser.Parse()
+	if err != nil {
+		switch flagsErr := err.(type) {
+		case flags.ErrorType:
+			if flagsErr == flags.ErrHelp {
+				os.Exit(0)
+			}
+			os.Exit(1)
+		default:
+			os.Exit(1)
+		}
+	}
+
+	if len(args) == 0 {
+		parser.WriteHelp(os.Stdout)
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
 
-	// TODO(butterv): Get connections for the number of workers.
-	conn, err := grpc.DialContext(ctx, "localhost:8080", grpc.WithInsecure())
+	conns, err := newClientConnections(&opts)
 	if err != nil {
 		panic(err)
 	}
-	defer conn.Close()
 
-	stub := grpcdynamic.NewStub(conn)
+	//var stubs []grpcdynamic.Stub
+	//for i := 0; i < opt.connections; i++ {
+	//	stub := grpcdynamic.NewStub(conns[i])
+	//	stubs = append(stubs, stub)
+	//}
 
 	// TODO(butterv): The following are executed in parallel for each request.
 	var opts []grpc.CallOption
@@ -40,27 +81,65 @@ func main() {
 	// opts = append(opts, grpc.UseCompressor(gzip.Name))
 	//}
 
-	md := metadataFromHeaders(nil)
-	refCtx := metadata.NewOutgoingContext(ctx, md)
-	refClient := grpcreflect.NewClient(refCtx, reflectpb.NewServerReflectionClient(conn))
+	for _, conn := range conns {
+		md := metadataFromHeaders(nil)
+		refCtx := metadata.NewOutgoingContext(ctx, md)
+		refClient := grpcreflect.NewClient(refCtx, reflectpb.NewServerReflectionClient(conn))
 
-	mtd, err := getMethodDescFromReflect("grpc.health.v1.Health/Check", refClient)
-	if err != nil {
-		panic(err)
+		mtd, err := getMethodDescFromReflect("grpc.health.v1.Health/Check", refClient)
+		if err != nil {
+			panic(err)
+		}
+
+		mdt := mtd.GetInputType()
+		payloadMessage := dynamic.NewMessage(mdt)
+		if payloadMessage == nil {
+			panic(fmt.Errorf("no input type of method: %s", mtd.GetName()))
+		}
+
+		stub := grpcdynamic.NewStub(conn)
+		res, err := stub.InvokeRpc(ctx, mtd, payloadMessage, opts...)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("res: %s\n", res.String())
+	}
+}
+
+func newClientConnections(opts *Options) ([]*grpc.ClientConn, error) {
+	dialOptions := []grpc.DialOption{}
+
+	if opts != nil {
+		if opts.insecure {
+			dialOptions = append(dialOptions, grpc.WithInsecure())
+		} else {
+			// opts = append(opts, grpc.WithTransportCredentials(b.config.creds))
+		}
+
+		//if b.config.keepaliveTime > 0 {
+		//	opts = append(opts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		//		Time:    b.config.keepaliveTime,
+		//		Timeout: b.config.keepaliveTime,
+		//	}))
+		//}
 	}
 
-	mdt := mtd.GetInputType()
-	payloadMessage := dynamic.NewMessage(mdt)
-	if payloadMessage == nil {
-		panic(fmt.Errorf("no input type of method: %s", mtd.GetName()))
+	var conns []*grpc.ClientConn
+	for i := 0; i < opts.connections; i++ {
+		ctx := context.Background()
+		//ctx, _ = context.WithTimeout(ctx, b.config.dialTimeout)
+
+		conn, err := grpc.DialContext(ctx, opts.host, dialOptions...)
+		if err != nil {
+			// TODO(butterv): If returns error, all connections are closed explicitly.
+			return nil, err
+		}
+
+		conns = append(conns, conn)
 	}
 
-	res, err := stub.InvokeRpc(ctx, mtd, payloadMessage, opts...)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("res: %s\n", res.String())
+	return conns, nil
 }
 
 func metadataFromHeaders(headers []string) metadata.MD {
