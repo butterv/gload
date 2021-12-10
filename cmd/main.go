@@ -25,14 +25,14 @@ var (
 )
 
 type Options struct {
-	insecure          bool   `long:"insecure" description:"Use insecure connection." default:"false"`
-	timeout           uint   `long:"timeout" description:"Timeout for each request. Default is 10s, use 0 for infinite." default:"10"`
-	connectionTimeout uint   `long:"timeout" description:"Connection timeout for the initial connection dial." default:"10"`
-	host              string `long:"host" description:"Host to be load tested." required:"true"`
-	concurrency       uint   `long:"concurrency" description:"Number of concurrent operations." default:"1"`
-	connections       int    `long:"connections" description:"Number of connections." default:"1"`
-	rps               uint   `long:"rps" description:"Request per seconds." default:"1"`
-	duration          uint   `long:"duration" description:"Duration(seconds) of the load test." required:"true"`
+	Insecure          bool   `long:"insecure" description:"Use insecure connection."`
+	Timeout           uint   `long:"timeout" description:"Timeout for each request. Default is 10s, use 0 for infinite." default:"10"`
+	ConnectionTimeout uint   `long:"connection-timeout" description:"Connection timeout for the initial connection dial." default:"10"`
+	Host              string `long:"host" description:"Host to be load tested." required:"true"`
+	Concurrency       uint   `long:"concurrency" description:"Number of concurrent operations." default:"1"`
+	Connections       int    `long:"connections" description:"Number of connections." default:"1"`
+	Rps               uint   `long:"rps" description:"Request per seconds." default:"1"`
+	Duration          uint   `long:"duration" description:"Duration(seconds) of the load test." required:"true"`
 }
 
 var opts Options
@@ -44,22 +44,16 @@ func main() {
 	parser.Name = "gload"
 	parser.Usage = "hogehoge"
 
-	args, err := parser.Parse()
-	if err != nil {
+	if _, err := parser.Parse(); err != nil {
 		switch flagsErr := err.(type) {
-		case flags.ErrorType:
-			if flagsErr == flags.ErrHelp {
+		case *flags.Error:
+			if flagsErr.Type == flags.ErrHelp {
 				os.Exit(0)
 			}
 			os.Exit(1)
 		default:
 			os.Exit(1)
 		}
-	}
-
-	if len(args) == 0 {
-		parser.WriteHelp(os.Stdout)
-		os.Exit(1)
 	}
 
 	ctx := context.Background()
@@ -111,7 +105,7 @@ func newClientConnections(opts *Options) ([]*grpc.ClientConn, error) {
 	dialOptions := []grpc.DialOption{}
 
 	if opts != nil {
-		if opts.insecure {
+		if opts.Insecure {
 			dialOptions = append(dialOptions, grpc.WithInsecure())
 		} else {
 			// opts = append(opts, grpc.WithTransportCredentials(b.config.creds))
@@ -126,11 +120,11 @@ func newClientConnections(opts *Options) ([]*grpc.ClientConn, error) {
 	}
 
 	var conns []*grpc.ClientConn
-	for i := 0; i < opts.connections; i++ {
+	for i := 0; i < opts.Connections; i++ {
 		ctx := context.Background()
 		//ctx, _ = context.WithTimeout(ctx, b.config.dialTimeout)
 
-		conn, err := grpc.DialContext(ctx, opts.host, dialOptions...)
+		conn, err := grpc.DialContext(ctx, opts.Host, dialOptions...)
 		if err != nil {
 			// TODO(butterv): If returns error, all connections are closed explicitly.
 			return nil, err
